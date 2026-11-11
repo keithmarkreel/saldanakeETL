@@ -25,10 +25,12 @@ th{background:color-mix(in srgb,var(--line) 50%,transparent)}
 button,label.btn{background:var(--acc);color:#fff;border:0;border-radius:7px;padding:8px 14px;font:inherit;cursor:pointer;display:inline-block}
 button.alt{background:transparent;color:var(--acc);border:1px solid var(--acc)}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+.upload{display:flex;flex-direction:column;gap:6px;min-width:220px}
+.upload label{font-size:12px;color:var(--mute);font-weight:600}
+.upload input[type=file]{width:100%;max-width:260px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink)}
 pre{background:var(--code);color:var(--codeink);padding:14px;border-radius:8px;overflow:auto;max-height:520px;font-size:12.5px;margin:0}
 .tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
 .ok{color:var(--ok)}.warn{color:var(--warn)}
-input[type=file]{display:none}
 small{color:var(--mute)}
 ul.notes{margin:6px 0 0 18px;padding:0}
 </style>
@@ -45,9 +47,18 @@ ul.notes{margin:6px 0 0 18px;padding:0}
   <p class="sub">Loads the three CSVs from this site automatically. You can also choose your own files.</p>
   <div class="row">
     <button id="runBtn">Run ETL</button>
-    <label class="btn alt">Choose SIS<input type="file" accept=".csv" data-src="A"></label>
-    <label class="btn alt">Choose LMS<input type="file" accept=".csv" data-src="B"></label>
-    <label class="btn alt">Choose Accounting<input type="file" accept=".csv" data-src="C"></label>
+    <div class="upload">
+      <label for="file-a">SIS CSV</label>
+      <input id="file-a" type="file" accept=".csv" data-src="A">
+    </div>
+    <div class="upload">
+      <label for="file-b">LMS CSV</label>
+      <input id="file-b" type="file" accept=".csv" data-src="B">
+    </div>
+    <div class="upload">
+      <label for="file-c">Accounting CSV</label>
+      <input id="file-c" type="file" accept=".csv" data-src="C">
+    </div>
     <small id="status"></small>
   </div>
   <div class="grid" id="raw" style="margin-top:12px"></div>
@@ -236,18 +247,42 @@ function renderResult(out){
 async function run(reload){
   const st=document.getElementById("status");
   try{
-    if(reload) await Promise.all(["A","B","C"].filter(k=>reload===true||!sources[k]).map(loadDefault));
-    renderRaw(); renderResult(transform()); st.textContent="Done."; st.className="ok";
+    if(reload) {
+      const missing = ["A","B","C"].filter(k => !sources[k]);
+      if (missing.length) {
+        st.textContent = "Upload all three CSV files to continue.";
+        st.className = "warn";
+        return;
+      }
+      await Promise.all(["A","B","C"].filter(k=>reload===true||!sources[k]).map(loadDefault));
+    }
+    renderRaw();
+    renderResult(transform());
+    st.textContent = "Done.";
+    st.className = "ok";
   }catch(e){
-    st.textContent="Could not load CSVs automatically ("+e.message+"). Use the Choose buttons.";
-    st.className="warn";
+    st.textContent = "Could not load CSVs automatically ("+e.message+"). Use the Choose buttons.";
+    st.className = "warn";
   }
 }
-document.getElementById("runBtn").onclick=()=>run(true);
+document.getElementById("runBtn").onclick=()=>{
+  if (!sources.A || !sources.B || !sources.C) {
+    document.getElementById("status").textContent = "Please upload all three CSV files before running ETL.";
+    document.getElementById("status").className = "warn";
+    return;
+  }
+  run(false);
+};
 document.querySelectorAll("input[type=file]").forEach(inp=>inp.onchange=async e=>{
   const f=e.target.files[0]; if(!f)return;
   sources[inp.dataset.src]=parseCSV(await f.text());
-  if(sources.A&&sources.B&&sources.C) run(false); else renderRaw();
+  document.getElementById("status").textContent = `Loaded ${f.name} for ${{A:"SIS",B:"LMS",C:"Accounting"}[inp.dataset.src]}.`;
+  document.getElementById("status").className = "ok";
+  if(sources.A && sources.B && sources.C) {
+    run(false);
+  } else {
+    renderRaw();
+  }
 });
 document.getElementById("copyBtn").onclick=async()=>{
   await navigator.clipboard.writeText(document.getElementById("json").textContent);
@@ -258,7 +293,9 @@ document.getElementById("dlBtn").onclick=()=>{
   a.href=URL.createObjectURL(new Blob([document.getElementById("json").textContent],{type:"application/json"}));
   a.download="etl_output.json"; a.click();
 };
-renderStatic(); run(true);
+renderStatic();
+document.getElementById("status").textContent = "Upload all three CSV files to begin.";
+document.getElementById("status").className = "warn";
 </script>
 </body>
 </html>
