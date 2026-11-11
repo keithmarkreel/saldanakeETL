@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ETL Exercise – SIS / LMS / Accounting</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2430;--mute:#667085;--line:#e4e7ec;--acc:#1f6feb;--ok:#127a3e;--warn:#b54708;--code:#0f172a;--codeink:#d6e2ff}
+@media (prefers-color-scheme:dark){:root{--bg:#0e1116;--card:#171b22;--ink:#e6e9ef;--mute:#98a2b3;--line:#2a313c;--acc:#5b9dff;--ok:#4ade80;--warn:#fbbf24;--code:#0a0d12;--codeink:#cfe0ff}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+header,main{max-width:1100px;margin:0 auto;padding:0 16px}
+header{padding-top:28px}
+h1{margin:0 0 4px;font-size:24px}
+h2{font-size:17px;margin:0 0 10px}
+p.sub{margin:0;color:var(--mute)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin:16px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{border:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top;white-space:nowrap}
+td.wrap{white-space:normal}
+th{background:color-mix(in srgb,var(--line) 50%,transparent)}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+button,label.btn{background:var(--acc);color:#fff;border:0;border-radius:7px;padding:8px 14px;font:inherit;cursor:pointer;display:inline-block}
+button.alt{background:transparent;color:var(--acc);border:1px solid var(--acc)}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:10px}
+pre{background:var(--code);color:var(--codeink);padding:14px;border-radius:8px;overflow:auto;max-height:520px;font-size:12.5px;margin:0}
+.tag{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;border:1px solid var(--line)}
+.ok{color:var(--ok)}.warn{color:var(--warn)}
+input[type=file]{display:none}
+small{color:var(--mute)}
+ul.notes{margin:6px 0 0 18px;padding:0}
+</style>
+</head>
+<body>
+<header>
+  <h1>ETL Exercise</h1>
+  <p class="sub">Extract <b>SIS</b>, <b>LMS</b> and <b>Accounting</b> CSVs → Transform per the data map → integrated JSON ready for Loading.</p>
+</header>
+<main>
+
+<section class="card">
+  <h2>Task 1 · Extract</h2>
+  <p class="sub">Loads the three CSVs from this site automatically. You can also choose your own files.</p>
+  <div class="row">
+    <button id="runBtn">Run ETL</button>
+    <label class="btn alt">Choose SIS<input type="file" accept=".csv" data-src="A"></label>
+    <label class="btn alt">Choose LMS<input type="file" accept=".csv" data-src="B"></label>
+    <label class="btn alt">Choose Accounting<input type="file" accept=".csv" data-src="C"></label>
+    <small id="status"></small>
+  </div>
+  <div class="grid" id="raw" style="margin-top:12px"></div>
+</section>
+
+<section class="card">
+  <h2>Task 2 · Data Mapping</h2>
+  <div class="scroll"><table id="map"></table></div>
+  <p style="margin:12px 0 4px"><b>Program value map</b></p>
+  <div class="scroll"><table id="progmap"></table></div>
+  <p style="margin:12px 0 4px"><b>Design decisions</b></p>
+  <ul class="notes">
+    <li><b>Join key:</b> <span class="mono">student_id</span> (integer). SIS is the master list, so every SIS student is kept even when LMS or Accounting rows are missing.</li>
+    <li><b>Missing data:</b> no LMS rows → <span class="mono">courses: []</span>; no Accounting row → <span class="mono">accounting: null</span>. Both are flagged in <span class="mono">dataQuality</span> instead of deleting or guessing values.</li>
+    <li><b>Grades:</b> a numeric grade (e.g. 1.50) becomes a JSON number. A non-numeric value such as <span class="mono">INC</span> is never forced into a number; it stays as the uppercase string <span class="mono">"INC"</span> and <span class="mono">gradeType</span> is <span class="mono">"status"</span>. This keeps averages from being corrupted by a fake 0 or NaN, and the grade still reads as "incomplete".</li>
+    <li><b>Orphans:</b> LMS/Accounting rows whose student_id is not in the SIS (e.g. 1005) cannot be tied to a student, so they are not merged into <span class="mono">students</span>. They are listed under <span class="mono">unmatched</span> for review.</li>
+    <li><b>Student ID:</b> parsed to integer but treated as an identifier (never summed or averaged).</li>
+  </ul>
+</section>
+
+<section class="card">
+  <h2>Task 3 · Transformed Records</h2>
+  <div class="scroll"><table id="flat"></table></div>
+  <p id="issues" style="margin-bottom:0"></p>
+</section>
+
+<section class="card">
+  <h2>Task 4 · Integrated JSON (ready for Loading)</h2>
+  <div class="row" style="margin:0 0 10px">
+    <button id="copyBtn" class="alt">Copy JSON</button>
+    <button id="dlBtn">Download etl_output.json</button>
+  </div>
+  <pre id="json"></pre>
+</section>
+</main>
+
+<script>
+/* ---------- config ---------- */
+const PROGRAM_MAP = {
+  BSIT: "Bachelor of Science in Information Technology",
+  BSCS: "Bachelor of Science in Computer Science",
+  BSIS: "Bachelor of Science in Information Systems"
+};
+const FILES = {A:"source_A_SIS.csv", B:"source_B_LMS.csv", C:"source_C_Accounting.csv"};
+const DEFAULT_SOURCES = {
+  A: `student_id,student_name,program_code,email\n1001,JUAN dela CRUZ,BSIT,juan.delacruz@school.edu\n1002,maria gonzales,BSCS,maria.gonzales@school.edu\n1003,ALEJANDRO SANTOS,BSIS,alejandro.santos@school.edu\n1004,Lina Reyes,BSIT,lina.reyes@school.edu\n1005,Ricardo Lim,BSCS,ricardo.lim@school.edu`,
+  B: `student_id,course_code,final_grade,completion_status\n1001,CS101,92,Completed\n1001,IT201,INC,Incomplete\n1002,CS110,88,completed\n1002,CS115,75,Completed\n1003,IS301,79,completed\n1005,MATH201,90,Completed\n1006,EC101,85,Completed`,
+  C: `student_id,account_balance,currency\n1001,3500.50,USD\n1002,1200.00,PHP\n1003,2750.25,USD\n1005,0.00,USD\n1007,4300.00,EUR`
+};
+const MAPPING = [
+ ["SIS","student_id","studentId","Integer","Trim, parseInt; kept as an identifier (join key)."],
+ ["SIS","student_name","studentName","String","Trim, collapse spaces, proper case."],
+ ["SIS","program_code","program","String","Trim + uppercase, then map to full program name."],
+ ["SIS","program_code","programCode","String","Trim + uppercase (normalized code kept for reference). Added row."],
+ ["SIS","email","emailAddress","String","Trim, lowercase."],
+ ["LMS","student_id","(join key)","Integer","Trim, parseInt; links course rows to the SIS student."],
+ ["LMS","course_code","courseCode","String","Trim + uppercase."],
+ ["LMS","final_grade","finalGrade","Number or String","Numeric → Number; non-numeric (INC) → uppercase string, not forced to a number."],
+ ["LMS","final_grade","gradeType","String","\"numeric\" or \"status\". Added row to make the grade type explicit."],
+ ["LMS","completion_status","completionStatus","String","Trim, lowercase, then proper case (completed → Completed)."],
+ ["Accounting","student_id","(join key)","Integer","Trim, parseInt; links balance to the SIS student."],
+ ["Accounting","account_balance","outstandingBalance","Number","Trim, parseFloat, rounded to 2 decimals."],
+ ["Accounting","currency","currency","String","Trim + uppercase."],
+ ["Derived","—","dataQuality","Object","hasLmsData / hasAccountingData flags and a list of issues. Added row."]
+];
+
+/* ---------- Extract ---------- */
+function parseCSV(text){
+  const rows=[]; let row=[], cur="", q=false;
+  text = text.replace(/^\uFEFF/,"");
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(q){
+      if(c=='"'){ if(text[i+1]=='"'){cur+='"';i++;} else q=false; } else cur+=c;
+    } else if(c=='"') q=true;
+    else if(c==","){row.push(cur);cur="";}
+    else if(c=="\n"||c=="\r"){
+      if(c=="\r"&&text[i+1]=="\n")i++;
+      row.push(cur);cur="";rows.push(row);row=[];
+    } else cur+=c;
+  }
+  if(cur!==""||row.length){row.push(cur);rows.push(row);}
+  const clean=rows.filter(r=>r.some(v=>v.trim()!==""));
+  const head=clean.shift().map(h=>h.trim());
+  return clean.map(r=>Object.fromEntries(head.map((h,i)=>[h,r[i]??""])));
+}
+const sources={A:null,B:null,C:null};
+async function loadDefault(k){
+  try {
+    const res=await fetch(FILES[k], { cache: "no-store" });
+    if(!res.ok) throw new Error(FILES[k]+" ("+res.status+")");
+    const text = await res.text();
+    if(!text || !text.trim()) throw new Error(FILES[k]+" is empty");
+    sources[k]=parseCSV(text);
+    return false;
+  } catch (error) {
+    if(!DEFAULT_SOURCES[k]) throw error;
+    sources[k]=parseCSV(DEFAULT_SOURCES[k]);
+    return true;
+  }
+}
+
+/* ---------- Transform helpers ---------- */
+const trim=v=>(v??"").toString().trim();
+const toInt=v=>{const n=parseInt(trim(v),10);return Number.isNaN(n)?null:n;};
+const properCase=s=>trim(s).replace(/\s+/g," ").toLowerCase().replace(/(^|[\s\-'])([a-z\u00e0-\u00ff])/g,(m,a,b)=>a+b.toUpperCase());
+const toNumber=v=>{const t=trim(v).replace(/,/g,"");if(t==="")return null;const n=Number(t);return Number.isFinite(n)?n:null;};
+function transformGrade(raw){
+  const t=trim(raw); const n=toNumber(t);
+  return n!==null ? {finalGrade:n, gradeType:"numeric"} : {finalGrade:t===""?null:t.toUpperCase(), gradeType:"status"};
+}
+
+function transform(){
+  const sis=sources.A, lms=sources.B, acc=sources.C;
+  const sisIds=new Set(sis.map(r=>toInt(r.student_id)));
+
+  const lmsBy={}, accBy={};
+  lms.forEach(r=>{
+    const id=toInt(r.student_id); if(id===null)return;
+    (lmsBy[id]=lmsBy[id]||[]).push({
+      courseCode:trim(r.course_code).toUpperCase(),
+      ...transformGrade(r.final_grade),
+      completionStatus:properCase(r.completion_status)
+    });
+  });
+  acc.forEach(r=>{
+    const id=toInt(r.student_id); if(id===null)return;
+    accBy[id]={outstandingBalance:Math.round((toNumber(r.account_balance)??0)*100)/100, currency:trim(r.currency).toUpperCase()};
+  });
+
+  const students=sis.map(r=>{
+    const id=toInt(r.student_id), code=trim(r.program_code).toUpperCase();
+    const courses=lmsBy[id]||[], accounting=accBy[id]||null, issues=[];
+    if(!courses.length) issues.push("No LMS data");
+    if(!accounting) issues.push("No Accounting data");
+    if(!PROGRAM_MAP[code]) issues.push("Unknown program code: "+code);
+    return {
+      studentId:id,
+      studentName:properCase(r.student_name),
+      programCode:code,
+      program:PROGRAM_MAP[code]||null,
+      emailAddress:trim(r.email).toLowerCase(),
+      courses, accounting,
+      dataQuality:{hasLmsData:courses.length>0, hasAccountingData:!!accounting, issues}
+    };
+  });
+
+  const unmatched={
+    lms:Object.keys(lmsBy).filter(id=>!sisIds.has(+id)).flatMap(id=>lmsBy[id].map(c=>({studentId:+id,...c}))),
+    accounting:Object.keys(accBy).filter(id=>!sisIds.has(+id)).map(id=>({studentId:+id,...accBy[id]}))
+  };
+
+  return {
+    metadata:{generatedAt:new Date().toISOString(), sources:Object.values(FILES),
+      counts:{sisStudents:sis.length, lmsRows:lms.length, accountingRows:acc.length,
+              unmatchedLms:unmatched.lms.length, unmatchedAccounting:unmatched.accounting.length}},
+    students, unmatched
+  };
+}
+
+/* ---------- Render ---------- */
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function tableHTML(rows,cols){
+  return "<thead><tr>"+cols.map(c=>"<th>"+esc(c)+"</th>").join("")+"</tr></thead><tbody>"+
+    rows.map(r=>"<tr>"+cols.map(c=>"<td>"+esc(r[c])+"</td>").join("")+"</tr>").join("")+"</tbody>";
+}
+function renderRaw(){
+  const names={A:"Source A · SIS",B:"Source B · LMS",C:"Source C · Accounting"};
+  document.getElementById("raw").innerHTML=["A","B","C"].map(k=>{
+    const rows=sources[k]||[]; const cols=rows[0]?Object.keys(rows[0]):[];
+    const shown=rows.map(r=>Object.fromEntries(cols.map(c=>[c,JSON.stringify(r[c])])));
+    return `<div><b>${names[k]}</b> <span class="tag">${rows.length} rows</span><div class="scroll"><table>${tableHTML(shown,cols)}</table></div></div>`;
+  }).join("");
+}
+function renderStatic(){
+  document.getElementById("map").innerHTML=tableHTML(MAPPING.map(m=>({"Source System":m[0],"Source Field":m[1],"Target Field":m[2],"Target Type":m[3],"Transformation / Rule":m[4]})),
+    ["Source System","Source Field","Target Field","Target Type","Transformation / Rule"]).replace(/<td>([^<]{50,})<\/td>/g,'<td class="wrap">$1</td>');
+  document.getElementById("progmap").innerHTML=tableHTML(Object.entries(PROGRAM_MAP).map(([k,v])=>({"Code":k,"Program":v})),["Code","Program"]);
+}
+function renderResult(out){
+  const flat=out.students.map(s=>({
+    studentId:s.studentId, studentName:s.studentName, program:s.program, emailAddress:s.emailAddress,
+    courseCode:s.courses.map(c=>c.courseCode).join(", ")||"—",
+    finalGrade:s.courses.map(c=>c.finalGrade).join(", ")||"—",
+    completionStatus:s.courses.map(c=>c.completionStatus).join(", ")||"—",
+    outstandingBalance:s.accounting?s.accounting.outstandingBalance:"—",
+    currency:s.accounting?s.accounting.currency:"—"
+  }));
+  document.getElementById("flat").innerHTML=tableHTML(flat,Object.keys(flat[0]||{}));
+  const notes=out.students.filter(s=>s.dataQuality.issues.length).map(s=>`<span class="warn">#${s.studentId} ${esc(s.studentName)}: ${esc(s.dataQuality.issues.join("; "))}</span>`);
+  const un=out.unmatched.lms.length+out.unmatched.accounting.length;
+  if(un) notes.push(`<span class="warn">Unmatched (not in SIS): ${[...new Set([...out.unmatched.lms,...out.unmatched.accounting].map(r=>"#"+r.studentId))].join(", ")}</span>`);
+  document.getElementById("issues").innerHTML=notes.length?notes.join("<br>"):'<span class="ok">No data-quality issues.</span>';
+  document.getElementById("json").textContent=JSON.stringify(out,null,2);
+}
+
+/* ---------- Run ---------- */
+async function run(reload){
+  const st=document.getElementById("status");
+  let usedFallback = false;
+  try{
+    if(reload) {
+      const fallbackResults = await Promise.all(["A","B","C"].filter(k=>reload===true||!sources[k]).map(loadDefault));
+      usedFallback = fallbackResults.some(Boolean);
+    }
+    renderRaw(); renderResult(transform());
+    st.textContent = usedFallback ? "Done. Using bundled sample CSV data." : "Done.";
+    st.className = "ok";
+  }catch(e){
+    st.textContent="Could not load CSVs automatically ("+e.message+"). Use the Choose buttons.";
+    st.className="warn";
+  }
+}
+document.getElementById("runBtn").onclick=()=>run(true);
+document.querySelectorAll("input[type=file]").forEach(inp=>inp.onchange=async e=>{
+  const f=e.target.files[0]; if(!f)return;
+  sources[inp.dataset.src]=parseCSV(await f.text());
+  if(sources.A&&sources.B&&sources.C) run(false); else renderRaw();
+});
+document.getElementById("copyBtn").onclick=async()=>{
+  await navigator.clipboard.writeText(document.getElementById("json").textContent);
+  document.getElementById("copyBtn").textContent="Copied!"; setTimeout(()=>document.getElementById("copyBtn").textContent="Copy JSON",1500);
+};
+document.getElementById("dlBtn").onclick=()=>{
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([document.getElementById("json").textContent],{type:"application/json"}));
+  a.download="etl_output.json"; a.click();
+};
+renderStatic(); run(true);
+</script>
+</body>
+</html>
