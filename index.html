@@ -92,11 +92,6 @@ const PROGRAM_MAP = {
   BSIS: "Bachelor of Science in Information Systems"
 };
 const FILES = {A:"source_A_SIS.csv", B:"source_B_LMS.csv", C:"source_C_Accounting.csv"};
-const DEFAULT_SOURCES = {
-  A: `student_id,student_name,program_code,email\n1001,JUAN dela CRUZ,BSIT,juan.delacruz@school.edu\n1002,maria gonzales,BSCS,maria.gonzales@school.edu\n1003,ALEJANDRO SANTOS,BSIS,alejandro.santos@school.edu\n1004,Lina Reyes,BSIT,lina.reyes@school.edu\n1005,Ricardo Lim,BSCS,ricardo.lim@school.edu`,
-  B: `student_id,course_code,final_grade,completion_status\n1001,CS101,92,Completed\n1001,IT201,INC,Incomplete\n1002,CS110,88,completed\n1002,CS115,75,Completed\n1003,IS301,79,completed\n1005,MATH201,90,Completed\n1006,EC101,85,Completed`,
-  C: `student_id,account_balance,currency\n1001,3500.50,USD\n1002,1200.00,PHP\n1003,2750.25,USD\n1005,0.00,USD\n1007,4300.00,EUR`
-};
 const MAPPING = [
  ["SIS","student_id","studentId","Integer","Trim, parseInt; kept as an identifier (join key)."],
  ["SIS","student_name","studentName","String","Trim, collapse spaces, proper case."],
@@ -136,18 +131,11 @@ function parseCSV(text){
 }
 const sources={A:null,B:null,C:null};
 async function loadDefault(k){
-  try {
-    const res=await fetch(FILES[k], { cache: "no-store" });
-    if(!res.ok) throw new Error(FILES[k]+" ("+res.status+")");
-    const text = await res.text();
-    if(!text || !text.trim()) throw new Error(FILES[k]+" is empty");
-    sources[k]=parseCSV(text);
-    return false;
-  } catch (error) {
-    if(!DEFAULT_SOURCES[k]) throw error;
-    sources[k]=parseCSV(DEFAULT_SOURCES[k]);
-    return true;
-  }
+  const res=await fetch(FILES[k], { cache: "no-store" });
+  if(!res.ok) throw new Error(FILES[k]+" ("+res.status+")");
+  const text = await res.text();
+  if(!text || !text.trim()) throw new Error(FILES[k]+" is empty");
+  sources[k]=parseCSV(text);
 }
 
 /* ---------- Transform helpers ---------- */
@@ -247,15 +235,9 @@ function renderResult(out){
 /* ---------- Run ---------- */
 async function run(reload){
   const st=document.getElementById("status");
-  let usedFallback = false;
   try{
-    if(reload) {
-      const fallbackResults = await Promise.all(["A","B","C"].filter(k=>reload===true||!sources[k]).map(loadDefault));
-      usedFallback = fallbackResults.some(Boolean);
-    }
-    renderRaw(); renderResult(transform());
-    st.textContent = usedFallback ? "Done. Using bundled sample CSV data." : "Done.";
-    st.className = "ok";
+    if(reload) await Promise.all(["A","B","C"].filter(k=>reload===true||!sources[k]).map(loadDefault));
+    renderRaw(); renderResult(transform()); st.textContent="Done."; st.className="ok";
   }catch(e){
     st.textContent="Could not load CSVs automatically ("+e.message+"). Use the Choose buttons.";
     st.className="warn";
